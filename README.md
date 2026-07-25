@@ -155,6 +155,9 @@ shared file or folder itself. Absolute paths, parent traversal outside the share
 link escapes, and `.trash` paths are rejected. Moving or deleting the original resource makes the
 share unavailable; revocation removes recipient access immediately. `EDIT` replaces the contents
 of an existing shared file and cannot create files or change anything outside the shared boundary.
+It also enforces the owner's storage quota. Creating the same active share again reuses that share
+and updates its permissions instead of adding a duplicate. Shared browsing, downloads, and edits
+use the existing listing, download, and upload rate-limit budgets respectively.
 
 ---
 

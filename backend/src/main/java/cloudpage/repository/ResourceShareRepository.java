@@ -16,4 +16,7 @@ public interface ResourceShareRepository extends JpaRepository<ResourceShare, St
   Optional<ResourceShare> findByIdAndOwnerId(String id, String ownerId);
 
   Optional<ResourceShare> findByIdAndRecipientIdAndRevokedAtIsNull(String id, String recipientId);
+
+  Optional<ResourceShare> findByOwnerIdAndRecipientIdAndRelativePathAndRevokedAtIsNull(
+      String ownerId, String recipientId, String relativePath);
 }

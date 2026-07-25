@@ -14,11 +14,13 @@ import cloudpage.model.User;
 import cloudpage.repository.ResourceShareRepository;
 import cloudpage.repository.UserRepository;
 import java.io.IOException;
+import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Clock;
 import java.util.HashSet;
@@ -109,6 +111,14 @@ public class ResourceShareService {
     share.setResourceType(type);
     share.setPermissions(new HashSet<>(permissions));
     share.setCreatedAt(clock.instant());
+    var existing =
+        shareRepository.findByOwnerIdAndRecipientIdAndRelativePathAndRevokedAtIsNull(
+            owner.getId(), recipient.getId(), share.getRelativePath());
+    if (existing.isPresent()) {
+      ResourceShare activeShare = existing.get();
+      activeShare.setPermissions(new HashSet<>(permissions));
+      return toDto(shareRepository.save(activeShare), owner, recipient);
+    }
     return toDto(shareRepository.save(share), owner, recipient);
   }
 
@@ -165,8 +175,21 @@ public class ResourceShareService {
     if (!Files.isRegularFile(resolved.target())) {
       throw new ResourceNotFoundException("Shared file", "path", childPath);
     }
-    try (var input = file.getInputStream()) {
-      Files.copy(input, resolved.target(), StandardCopyOption.REPLACE_EXISTING);
+    long existingSize = Files.size(resolved.target());
+    fileService.validateReplacementWithinQuota(
+        resolved.ownerRoot().toString(), existingSize, file.getSize(), resolved.ownerQuotaMb());
+    try (var input = file.getInputStream();
+        FileChannel channel =
+            FileChannel.open(
+                resolved.target(), StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
+      Path currentTarget = resolved.target().toRealPath(LinkOption.NOFOLLOW_LINKS).normalize();
+      if (Files.isSymbolicLink(resolved.target())
+          || !currentTarget.startsWith(resolved.sharedRoot())
+          || !currentTarget.startsWith(resolved.ownerRoot())) {
+        throw new InvalidPathException("Shared edit target is no longer inside its share");
+      }
+      channel.truncate(0);
+      input.transferTo(Channels.newOutputStream(channel));
     }
   }
 
@@ -250,7 +273,7 @@ public class ResourceShareService {
     if (!targetReal.startsWith(sharedRoot) || !targetReal.startsWith(ownerRoot)) {
       throw new ResourceNotFoundException("Shared resource", "path", childPath);
     }
-    return new ResolvedShare(ownerRoot, targetReal);
+    return new ResolvedShare(ownerRoot, sharedRoot, targetReal, owner.getStorageQuotaMb());
   }
 
   private Path parseRelativePath(String value, String label) {
@@ -291,5 +314,5 @@ public class ResourceShareService {
         share.getRevokedAt() != null);
   }
 
-  private record ResolvedShare(Path ownerRoot, Path target) {}
+  private record ResolvedShare(Path ownerRoot, Path sharedRoot, Path target, Long ownerQuotaMb) {}
 }

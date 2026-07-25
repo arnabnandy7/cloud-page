@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -78,6 +79,22 @@ class ResourceShareServiceTest {
     assertEquals(SharedResourceType.FILE, dto.resourceType());
     assertEquals(Set.of(SharePermission.VIEW, SharePermission.DOWNLOAD), dto.permissions());
     verify(shareRepository).save(any(ResourceShare.class));
+  }
+
+  @Test
+  void duplicateActiveShareIsReusedAndItsPermissionsAreUpdated() throws Exception {
+    Files.writeString(ownerRoot.resolve("report.pdf"), "report");
+    ResourceShare existing = share("existing-share", "report.pdf", SharedResourceType.FILE);
+    existing.setPermissions(Set.of(SharePermission.VIEW));
+    when(shareRepository.findByOwnerIdAndRecipientIdAndRelativePathAndRevokedAtIsNull(
+            "owner-1", "recipient-1", "report.pdf"))
+        .thenReturn(Optional.of(existing));
+
+    var dto = service.create(owner, "report.pdf", "bob", Set.of(SharePermission.DOWNLOAD));
+
+    assertEquals("existing-share", dto.id());
+    assertEquals(Set.of(SharePermission.DOWNLOAD), existing.getPermissions());
+    verify(shareRepository, times(1)).save(existing);
   }
 
   @Test
@@ -159,6 +176,23 @@ class ResourceShareServiceTest {
                 "../private.txt",
                 new MockMultipartFile("file", "blocked".getBytes())));
     assertEquals("private", Files.readString(ownerRoot.resolve("private.txt")));
+  }
+
+  @Test
+  void editRespectsOwnerStorageQuota() throws Exception {
+    Path target = Files.writeString(ownerRoot.resolve("notes.txt"), "before");
+    owner.setStorageQuotaMb(0L);
+    ResourceShare share = share("share-1", "notes.txt", SharedResourceType.FILE);
+    share.setPermissions(Set.of(SharePermission.EDIT));
+    when(shareRepository.findByIdAndRecipientIdAndRevokedAtIsNull("share-1", "recipient-1"))
+        .thenReturn(Optional.of(share));
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            service.editFile(
+                "share-1", recipient, "", new MockMultipartFile("file", "replacement".getBytes())));
+    assertEquals("before", Files.readString(target));
   }
 
   @Test
